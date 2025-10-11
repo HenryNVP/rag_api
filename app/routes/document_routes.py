@@ -47,7 +47,10 @@ def get_user_id(request: Request, entity_id: str = None) -> str:
     if not hasattr(request.state, "user"):
         return entity_id if entity_id else "public"
     else:
-        return entity_id if entity_id else request.state.user.get("id")
+        user_payload = request.state.user or {}
+        if entity_id:
+            return entity_id
+        return user_payload.get("id") or user_payload.get("sub") or "public"
 
 
 async def save_upload_file_async(file: UploadFile, temp_file_path: str) -> None:
@@ -263,12 +266,8 @@ async def query_embeddings_by_file_id(
     body: QueryRequestBody,
     request: Request,
 ):
-    if not hasattr(request.state, "user"):
-        user_authorized = body.entity_id if body.entity_id else "public"
-    else:
-        user_authorized = (
-            body.entity_id if body.entity_id else request.state.user.get("id")
-        )
+    user_authorized = get_user_id(request, body.entity_id)
+    fallback_user = get_user_id(request, None)
 
     authorized_documents = []
 
@@ -299,7 +298,7 @@ async def query_embeddings_by_file_id(
         else:
             # If using entity_id and access denied, try again with user's actual ID
             if body.entity_id and hasattr(request.state, "user"):
-                user_authorized = request.state.user.get("id")
+                user_authorized = fallback_user
                 if doc_user_id == user_authorized:
                     authorized_documents = documents
                 else:
@@ -313,7 +312,7 @@ async def query_embeddings_by_file_id(
                         )
             else:
                 logger.warning(
-                    f"Unauthorized access attempt by user {user_authorized} to a document with user_id {doc_user_id}"
+                    f"Unauthorized access attempt by user {fallback_user if fallback_user else 'unknown'} to a document with user_id {doc_user_id}"
                 )
 
         return authorized_documents
@@ -409,10 +408,7 @@ async def embed_local_file(
             detail=ERROR_MESSAGES.FILE_NOT_FOUND,
         )
 
-    if not hasattr(request.state, "user"):
-        user_id = entity_id if entity_id else "public"
-    else:
-        user_id = entity_id if entity_id else request.state.user.get("id")
+    user_id = get_user_id(request, entity_id)
 
     try:
         loader, known_type, file_ext = get_loader(
